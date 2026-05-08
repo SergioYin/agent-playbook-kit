@@ -1,0 +1,32 @@
+[project]
+name = "analytics-worker"
+summary = "Background analytics worker with a small CLI and deterministic tests."
+language = "Python"
+
+[commands]
+setup = "python -m pip install -e ."
+test = "python -m unittest discover -s tests"
+lint = "python -m compileall src tests"
+run = "python -m analytics_worker --help"
+
+[principles]
+items = [
+  "Make the smallest safe change that satisfies the issue.",
+  "Prefer deterministic tests over snapshot-only assertions.",
+  "If a command cannot be run, record the exact blocker in the handoff."
+]
+
+[boundaries]
+allowed = ["Source code", "unit tests", "README examples", "packaging metadata"]
+forbidden = [
+  "Do not edit deployment credentials or .env files.",
+  "Do not introduce network calls in unit tests.",
+  "Do not add GitHub Actions unless workflow scope is confirmed."
+]
+
+[context]
+architecture = "The CLI parses inputs; pure functions in src/analytics_worker/core.py own business logic."
+important_paths = ["src/analytics_worker/", "tests/", "examples/"]
+
+[handoff]
+summary_template = "List changed files, validation commands, behavior impact, and known risks."
