@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import re
 import sys
 import textwrap
@@ -50,6 +51,13 @@ summary_template = "Summarize changed files, validation commands, and remaining 
 class Issue:
     level: str
     message: str
+
+
+@dataclass
+class RenderedOutput:
+    target: str
+    path: Path
+    content: str
 
 
 def load_playbook(path: Path) -> dict[str, Any]:
@@ -140,14 +148,14 @@ Forbidden:
 """
 
 
-def render(data: dict[str, Any], out_dir: Path, targets: list[str], dry_run: bool = False) -> list[Path]:
+def render_outputs(data: dict[str, Any], out_dir: Path, targets: list[str]) -> list[RenderedOutput]:
     mapping = {
         "agents": Path("AGENTS.md"),
         "claude": Path("CLAUDE.md"),
         "cursor": Path(".cursor/rules/agent-playbook.mdc"),
         "copilot": Path(".github/copilot-instructions.md"),
     }
-    written: list[Path] = []
+    outputs: list[RenderedOutput] = []
     for target in targets:
         if target not in mapping:
             raise SystemExit(f"Unknown target: {target}")
@@ -156,11 +164,41 @@ def render(data: dict[str, Any], out_dir: Path, targets: list[str], dry_run: boo
         if target == "cursor":
             content = "---\ndescription: Project AI-agent playbook\nalwaysApply: true\n---\n\n" + content
         dest = out_dir / rel
+        outputs.append(RenderedOutput(target, dest, content))
+    return outputs
+
+
+def render(data: dict[str, Any], out_dir: Path, targets: list[str], dry_run: bool = False) -> list[Path]:
+    written: list[Path] = []
+    for output in render_outputs(data, out_dir, targets):
+        dest = output.path
         written.append(dest)
         if not dry_run:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_text(content, encoding="utf-8")
+            dest.write_text(output.content, encoding="utf-8")
     return written
+
+
+def diff_outputs(data: dict[str, Any], out_dir: Path, targets: list[str]) -> list[str]:
+    diff_lines: list[str] = []
+    for output in render_outputs(data, out_dir, targets):
+        new_lines = output.content.splitlines(keepends=True)
+        if output.path.exists():
+            old_lines = output.path.read_text(encoding="utf-8").splitlines(keepends=True)
+            fromfile = str(output.path)
+        else:
+            old_lines = []
+            fromfile = "/dev/null"
+        tofile = str(output.path)
+        diff_lines.extend(
+            difflib.unified_diff(
+                old_lines,
+                new_lines,
+                fromfile=fromfile,
+                tofile=tofile,
+            )
+        )
+    return diff_lines
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -204,6 +242,25 @@ def cmd_render(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_diff(args: argparse.Namespace) -> int:
+    path = Path(args.playbook)
+    raw = path.read_text(encoding="utf-8")
+    data = load_playbook(path)
+    issues = validate(data, raw)
+    errors = [i for i in issues if i.level == "error"]
+    if errors:
+        for issue in errors:
+            print(f"ERROR: {issue.message}", file=sys.stderr)
+        return 1
+    targets = args.target or ["agents"]
+    diff_lines = diff_outputs(data, Path(args.out), targets)
+    if not diff_lines:
+        print("No changes.")
+        return 0
+    sys.stdout.writelines(diff_lines)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="agent-playbook",
@@ -213,6 +270,7 @@ def build_parser() -> argparse.ArgumentParser:
         Typical flow:
           agent-playbook init
           agent-playbook check agent-playbook.toml
+          agent-playbook diff --target agents --target claude --target cursor
           agent-playbook render --target agents --target claude --target cursor
         """),
     )
@@ -232,6 +290,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_render.add_argument("--target", action="append", choices=["agents", "claude", "cursor", "copilot"], help="render target; may be repeated; defaults to agents")
     p_render.add_argument("--dry-run", action="store_true")
     p_render.set_defaults(func=cmd_render)
+
+    p_diff = sub.add_parser("diff", help="preview instruction file changes")
+    p_diff.add_argument("playbook", nargs="?", default="agent-playbook.toml")
+    p_diff.add_argument("--out", default=".", help="output directory")
+    p_diff.add_argument("--target", action="append", choices=["agents", "claude", "cursor", "copilot"], help="diff target; may be repeated; defaults to agents")
+    p_diff.set_defaults(func=cmd_diff)
     return parser
 
 

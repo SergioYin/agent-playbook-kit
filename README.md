@@ -33,7 +33,10 @@ agent-playbook init
 # 2) Validate it
 agent-playbook check agent-playbook.toml
 
-# 3) Render files for common agents
+# 3) Preview generated file changes
+agent-playbook diff --target agents --target claude --target cursor
+
+# 4) Render files for common agents
 agent-playbook render --target agents --target claude --target cursor
 ```
 
@@ -84,6 +87,7 @@ summary_template = "Summarize changed files, validation commands, and remaining 
 ```bash
 agent-playbook init [path] [--force]
 agent-playbook check [agent-playbook.toml]
+agent-playbook diff [agent-playbook.toml] --target agents --target claude --target cursor --out .
 agent-playbook render [agent-playbook.toml] --target agents --target claude --target cursor --out .
 ```
 
@@ -94,12 +98,15 @@ agent-playbook render [agent-playbook.toml] --target agents --target claude --ta
 - over-large playbooks;
 - token/API-key/secret-looking strings.
 
+`diff` validates the playbook like `render`, then prints unified diffs between existing instruction files and the content that would be generated. Missing files are shown as diffs from `/dev/null`. Targets default to `agents`.
+
 ## Example
 
 See `examples/agent-playbook.toml` and run:
 
 ```bash
 python -m agent_playbook_kit.cli check examples/agent-playbook.toml
+python -m agent_playbook_kit.cli diff examples/agent-playbook.toml --out /tmp/agent-playbook-demo --target agents --target claude --target cursor
 python -m agent_playbook_kit.cli render examples/agent-playbook.toml --out /tmp/agent-playbook-demo --target agents --target claude --target cursor
 ```
 
