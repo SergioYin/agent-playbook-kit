@@ -30,14 +30,17 @@ No runtime dependencies are required beyond Python 3.11+.
 # 1) Create a starter playbook, or migrate existing instruction files
 agent-playbook init
 
+# Optional: preview migration before writing agent-playbook.toml
+agent-playbook init --preview
+
 # 2) Validate it
 agent-playbook check agent-playbook.toml
 
 # 3) Preview generated file changes
 agent-playbook diff --target agents --target claude --target cursor
 
-# 4) Use diff in scripts without writing files
-agent-playbook diff --exit-code --target agents --target claude --target cursor
+# 4) Use diff in scripts/local checks without writing files or printing clean output
+agent-playbook diff --quiet --target agents --target claude --target cursor
 
 # 5) Render files for common agents
 agent-playbook render --target agents --target claude --target cursor
@@ -88,10 +91,10 @@ summary_template = "Summarize changed files, validation commands, and remaining 
 ## CLI reference
 
 ```bash
-agent-playbook init [path] [--output agent-playbook.toml] [--force]
+agent-playbook init [path] [--output agent-playbook.toml] [--force] [--dry-run|--preview]
 agent-playbook check [agent-playbook.toml]
-agent-playbook diff [agent-playbook.toml] --target agents --target claude --target cursor --out . [--exit-code]
-agent-playbook render [agent-playbook.toml] --target agents --target claude --target cursor --out .
+agent-playbook diff [agent-playbook.toml] --target agents --target claude --target cursor --out . [--exit-code] [--quiet]
+agent-playbook render [agent-playbook.toml] --target agents --target claude --target cursor --out . [--dry-run]
 ```
 
 `init` creates `agent-playbook.toml` by default. If the repository already has `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, or `.cursor/rules/*.mdc`, it bootstraps the playbook from those files instead of writing the generic starter. It parses simple Markdown headings conservatively:
@@ -103,6 +106,13 @@ agent-playbook render [agent-playbook.toml] --target agents --target claude --ta
 
 Use `--output path/to/agent-playbook.toml` to choose the destination. Existing output files are never overwritten unless `--force` is passed.
 
+Use `--preview` or `--dry-run` before migration to inspect detected source files and the TOML sections that would be generated, without creating `agent-playbook.toml`:
+
+```bash
+agent-playbook init --preview
+agent-playbook init --dry-run --output /tmp/agent-playbook.toml
+```
+
 `check` reports:
 
 - missing required project metadata;
@@ -111,6 +121,12 @@ Use `--output path/to/agent-playbook.toml` to choose the destination. Existing o
 - token/API-key/secret-looking strings.
 
 `diff` validates the playbook like `render`, then prints unified diffs between existing instruction files and the content that would be generated. Missing files are shown as diffs from `/dev/null`. Targets default to `agents`. Pass `--exit-code` to return `1` when generated output would differ from files on disk, `0` when there are no changes, and `2` for validation or usage errors.
+
+Use `--quiet` for copy-paste local verification in scripts. It prints nothing when generated outputs match the files on disk, exits `0` when clean, and exits `1` when any target has drift:
+
+```bash
+agent-playbook diff --quiet --target agents --target claude --target cursor
+```
 
 ## Example
 
@@ -151,8 +167,10 @@ Payment API for account billing.
 EOF
 
 agent-playbook init --output agent-playbook.toml
+agent-playbook init --preview
 agent-playbook check agent-playbook.toml
 agent-playbook diff agent-playbook.toml --target agents --target claude --target cursor
+agent-playbook diff --quiet agent-playbook.toml --target agents --target claude --target cursor
 ```
 
 ## Non-goals

@@ -42,6 +42,20 @@ class AgentPlaybookTests(unittest.TestCase):
             self.assertTrue((out / "CLAUDE.md").exists())
             self.assertTrue((out / ".cursor/rules/agent-playbook.mdc").exists())
 
+    def test_cli_render_dry_run_does_not_write_targets(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["render", str(playbook), "--out", str(out), "--target", "agents", "--dry-run"])
+
+            self.assertEqual(status, 0)
+            self.assertIn(f"Would write: {out / 'AGENTS.md'}", stdout.getvalue())
+            self.assertFalse((out / "AGENTS.md").exists())
+
     def test_cli_check_example(self) -> None:
         self.assertEqual(main(["check", "examples/agent-playbook.toml"]), 0)
 
@@ -137,6 +151,46 @@ alwaysApply: true
             self.assertEqual(data["commands"]["lint"], "python -m compileall src tests")
             self.assertEqual(data["context"]["important_paths"], [".cursor/rules/python.mdc"])
 
+    def test_cli_init_dry_run_previews_migration_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            Path("CLAUDE.md").write_text(
+                """# Agent Instructions
+
+## Project
+
+Billing service.
+
+## Commands
+
+- Test: `python -m unittest`
+""",
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["init", "--dry-run"])
+
+            output = stdout.getvalue()
+            self.assertEqual(status, 0)
+            self.assertFalse(Path("agent-playbook.toml").exists())
+            self.assertIn("Would create agent-playbook.toml", output)
+            self.assertIn("Detected source files:", output)
+            self.assertIn("- CLAUDE.md", output)
+            self.assertIn("- [commands]", output)
+
+    def test_cli_init_preview_alias_does_not_refuse_existing_output(self) -> None:
+        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            Path("agent-playbook.toml").write_text("existing", encoding="utf-8")
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["init", "--preview"])
+
+            self.assertEqual(status, 0)
+            self.assertEqual(Path("agent-playbook.toml").read_text(encoding="utf-8"), "existing")
+            self.assertIn("Would create agent-playbook.toml", stdout.getvalue())
+
     def test_cli_init_redacts_secret_looking_migrated_text(self) -> None:
         with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
             fake_value = "abcdefghijklmnopqrstuvwxyz" + "123456"
@@ -201,6 +255,35 @@ alwaysApply: true
             self.assertEqual(status, 0)
             self.assertEqual(stdout.getvalue(), "No changes.\n")
 
+    def test_cli_diff_quiet_reports_no_changes_silently(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
+            data = load_playbook(playbook)
+            render(data, out, ["agents"])
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["diff", str(playbook), "--out", str(out), "--quiet"])
+
+            self.assertEqual(status, 0)
+            self.assertEqual(stdout.getvalue(), "")
+
+    def test_cli_diff_quiet_reports_drift_silently(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["diff", str(playbook), "--out", str(out), "--quiet"])
+
+            self.assertEqual(status, 1)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertFalse((out / "AGENTS.md").exists())
+
     def test_cli_diff_exit_code_reports_no_changes(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             playbook = Path(td) / "agent-playbook.toml"
@@ -244,6 +327,24 @@ alwaysApply: true
 
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
                 status = main(["diff", str(playbook), "--out", str(out), "--exit-code"])
+
+            self.assertEqual(status, 2)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertIn("ERROR: possible secret detected", stderr.getvalue())
+            self.assertFalse((out / "AGENTS.md").exists())
+
+    def test_cli_diff_quiet_validation_errors_return_two(self) -> None:
+        fake_value = "abcdefghijklmnopqrstuvwxyz" + "123456"
+        raw = DEFAULT_PLAYBOOK + f'\nleak = "token={fake_value}"\n'
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            playbook.write_text(raw, encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                status = main(["diff", str(playbook), "--out", str(out), "--quiet"])
 
             self.assertEqual(status, 2)
             self.assertEqual(stdout.getvalue(), "")

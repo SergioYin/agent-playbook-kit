@@ -303,6 +303,28 @@ def init_playbook_content(root: Path) -> tuple[str, list[Path]]:
     return build_migrated_playbook(root, sources), sources
 
 
+def preview_init(content: str, sources: list[Path], root: Path, path: Path) -> None:
+    print(f"Would create {path}")
+    if sources:
+        print("Detected source files:")
+        for source in sources:
+            print(f"- {source.relative_to(root)}")
+    else:
+        print("Detected source files: none; would use starter playbook")
+
+    data = tomllib.loads(content)
+    print("Generated sections:")
+    for section in ("project", "commands", "principles", "boundaries", "context", "handoff"):
+        value = data.get(section)
+        if not value:
+            continue
+        if isinstance(value, dict):
+            keys = ", ".join(sorted(value))
+            print(f"- [{section}] {keys}")
+        else:
+            print(f"- [{section}]")
+
+
 def validate(data: dict[str, Any], raw_text: str) -> list[Issue]:
     issues: list[Issue] = []
     project = data.get("project", {})
@@ -436,11 +458,14 @@ def cmd_init(args: argparse.Namespace) -> int:
         print("Use either positional path or --output, not both", file=sys.stderr)
         return 2
     path = Path(args.output if args.output != "agent-playbook.toml" else args.path)
-    if path.exists() and not args.force:
+    if path.exists() and not args.force and not args.dry_run:
         print(f"Refusing to overwrite {path}; pass --force", file=sys.stderr)
         return 2
     root = Path(".")
     content, sources = init_playbook_content(root)
+    if args.dry_run:
+        preview_init(content, sources, root, path)
+        return 0
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     if sources:
@@ -491,12 +516,15 @@ def cmd_diff(args: argparse.Namespace) -> int:
     if errors:
         for issue in errors:
             print(f"ERROR: {issue.message}", file=sys.stderr)
-        return 2 if args.exit_code else 1
+        return 2 if args.exit_code or args.quiet else 1
     targets = args.target or ["agents"]
     diff_lines = diff_outputs(data, Path(args.out), targets)
     if not diff_lines:
-        print("No changes.")
+        if not args.quiet:
+            print("No changes.")
         return 0
+    if args.quiet:
+        return 1
     sys.stdout.writelines(diff_lines)
     return 1 if args.exit_code else 0
 
@@ -519,6 +547,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("path", nargs="?", default="agent-playbook.toml")
     p_init.add_argument("--output", default="agent-playbook.toml", help="playbook path to create")
     p_init.add_argument("--force", action="store_true", help="overwrite an existing output file")
+    p_init.add_argument("--dry-run", "--preview", action="store_true", help="preview migrated playbook content without writing files")
     p_init.set_defaults(func=cmd_init)
 
     p_check = sub.add_parser("check", help="validate a playbook")
@@ -537,6 +566,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_diff.add_argument("--out", default=".", help="output directory")
     p_diff.add_argument("--target", action="append", choices=["agents", "claude", "cursor", "copilot"], help="diff target; may be repeated; defaults to agents")
     p_diff.add_argument("--exit-code", action="store_true", help="return 1 when generated output differs, 0 when unchanged, and 2 for validation errors")
+    p_diff.add_argument("--quiet", action="store_true", help="return 1 when generated output differs without printing diffs")
     p_diff.set_defaults(func=cmd_diff)
     return parser
 
