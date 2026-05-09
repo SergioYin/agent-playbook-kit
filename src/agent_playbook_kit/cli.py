@@ -47,6 +47,107 @@ important_paths = ["src/", "tests/", "examples/"]
 summary_template = "Summarize changed files, validation commands, and remaining risks."
 """
 
+STARTER_TEMPLATES: dict[str, dict[str, Any]] = {
+    "generic": {
+        "description": "General-purpose starter matching the original init behavior.",
+        "language": "Python",
+        "summary": "Small service used to demonstrate agent instructions.",
+        "commands": {
+            "setup": "python -m pip install -e .",
+            "test": "python -m pytest",
+            "lint": "python -m compileall src tests",
+            "run": "python -m example_service",
+        },
+        "principles": [
+            "Prefer small, reviewable changes.",
+            "Run tests or explain why they could not run.",
+            "Never commit secrets, .env files, build caches, or generated credentials.",
+        ],
+        "allowed": ["Edit source, tests, docs, examples, and packaging metadata."],
+        "forbidden": [
+            "Do not alter production credentials or deploy infrastructure.",
+            "Do not add GitHub Actions unless workflow-scope auth is confirmed.",
+        ],
+        "architecture": "Keep business logic isolated from CLI glue.",
+        "paths": ["src/", "tests/", "examples/"],
+        "handoff": "Summarize changed files, validation commands, and remaining risks.",
+    },
+    "python-cli": {
+        "description": "Python command-line tool with unittest/compileall checks.",
+        "language": "Python",
+        "summary": "Python CLI package with standard-library friendly tests and packaging metadata.",
+        "commands": {
+            "setup": "python -m pip install -e .",
+            "test": "python -m unittest discover -s tests -v",
+            "lint": "python -m compileall src tests",
+            "run": "python -m your_package --help",
+        },
+        "principles": [
+            "Keep CLI parsing thin and move behavior into testable functions.",
+            "Prefer deterministic unit tests around command behavior and exit codes.",
+            "Preserve standard-library compatibility unless project metadata says otherwise.",
+        ],
+        "allowed": ["Edit Python source, tests, examples, README, and packaging metadata."],
+        "forbidden": [
+            "Do not commit virtual environments, build artifacts, caches, or credentials.",
+            "Do not introduce network calls into unit tests.",
+            "Do not add GitHub Actions unless workflow-scope auth is confirmed.",
+        ],
+        "architecture": "The CLI should parse arguments and delegate behavior to importable modules under src/.",
+        "paths": ["src/", "tests/", "README.md", "pyproject.toml"],
+        "handoff": "List changed files, validation commands, user-visible CLI impact, and remaining risks.",
+    },
+    "node-library": {
+        "description": "Node.js or TypeScript library with npm scripts.",
+        "language": "JavaScript/TypeScript",
+        "summary": "Node library intended for package consumers and automated tests.",
+        "commands": {
+            "setup": "npm install",
+            "test": "npm test",
+            "lint": "npm run lint",
+            "build": "npm run build",
+        },
+        "principles": [
+            "Keep public APIs stable and document behavior changes.",
+            "Prefer focused tests around exported functions and package entry points.",
+            "Avoid generated dependency churn unless dependency changes are required.",
+        ],
+        "allowed": ["Edit library source, tests, examples, README, and package metadata."],
+        "forbidden": [
+            "Do not commit node_modules, build output, .env files, or registry tokens.",
+            "Do not change package publishing credentials or release automation.",
+            "Do not add GitHub Actions unless workflow-scope auth is confirmed.",
+        ],
+        "architecture": "Source modules expose the public API; tests should cover package entry points and edge cases.",
+        "paths": ["src/", "test/", "tests/", "package.json", "README.md"],
+        "handoff": "Summarize API impact, validation commands, changed files, and any release risks.",
+    },
+    "docs-only": {
+        "description": "Documentation repository or docs-focused project.",
+        "language": "Markdown",
+        "summary": "Documentation project focused on accurate, readable Markdown content.",
+        "commands": {
+            "setup": "python -m pip install -e .",
+            "test": "python -m unittest discover -s tests -v",
+            "lint": "python -m compileall scripts tests",
+        },
+        "principles": [
+            "Preserve user-facing meaning and examples when reorganizing text.",
+            "Keep instructions copy-paste runnable and note environment assumptions.",
+            "Prefer concise docs with clear command examples over broad rewrites.",
+        ],
+        "allowed": ["Edit Markdown, examples, docs assets, and documentation helper scripts."],
+        "forbidden": [
+            "Do not edit production credentials, deployment settings, or generated site output.",
+            "Do not add external dependencies for simple documentation checks.",
+            "Do not add GitHub Actions unless workflow-scope auth is confirmed.",
+        ],
+        "architecture": "README and docs pages are the source of truth; generated artifacts should be reproducible.",
+        "paths": ["README.md", "docs/", "examples/", "scripts/"],
+        "handoff": "List docs changed, commands run, examples checked, and any content that still needs review.",
+    },
+}
+
 INSTRUCTION_SOURCES = [
     Path("AGENTS.md"),
     Path("CLAUDE.md"),
@@ -107,6 +208,55 @@ def toml_array(items: list[str]) -> str:
         return "[]"
     rendered = ",\n  ".join(toml_string(item) for item in items)
     return "[\n  " + rendered + "\n]"
+
+
+def template_names() -> list[str]:
+    return sorted(STARTER_TEMPLATES)
+
+
+def render_template_playbook(template_name: str, root: Path) -> str:
+    try:
+        template = STARTER_TEMPLATES[template_name]
+    except KeyError as exc:
+        raise SystemExit(f"Unknown template: {template_name}") from exc
+    if template_name == "generic":
+        return DEFAULT_PLAYBOOK
+    lines = [
+        f"# agent-playbook.toml: {template_name} starter template",
+        "[project]",
+        f"name = {toml_string(infer_project_name(root))}",
+        f"summary = {toml_string(template['summary'])}",
+        f"language = {toml_string(template['language'])}",
+        "",
+        "[commands]",
+    ]
+    for key, value in template["commands"].items():
+        lines.append(f"{key} = {toml_string(value)}")
+    lines.extend(
+        [
+            "",
+            "[principles]",
+            f"items = {toml_array(template['principles'])}",
+            "",
+            "[boundaries]",
+            f"allowed = {toml_array(template['allowed'])}",
+            f"forbidden = {toml_array(template['forbidden'])}",
+            "",
+            "[context]",
+            f"architecture = {toml_string(template['architecture'])}",
+            f"important_paths = {toml_array(template['paths'])}",
+            "",
+            "[handoff]",
+            f"summary_template = {toml_string(template['handoff'])}",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def print_templates() -> None:
+    for name in template_names():
+        print(f"{name}\t{STARTER_TEMPLATES[name]['description']}")
 
 
 def clean_markdown_text(text: str) -> str:
@@ -296,11 +446,11 @@ def build_migrated_playbook(root: Path, sources: list[Path]) -> str:
     return "\n".join(lines)
 
 
-def init_playbook_content(root: Path) -> tuple[str, list[Path]]:
+def init_playbook_content(root: Path, template_name: str = "generic", force_template: bool = False) -> tuple[str, list[Path], str]:
     sources = discover_instruction_sources(root)
-    if not sources:
-        return DEFAULT_PLAYBOOK, []
-    return build_migrated_playbook(root, sources), sources
+    if sources and not force_template:
+        return build_migrated_playbook(root, sources), sources, "migration"
+    return render_template_playbook(template_name, root), [], "template"
 
 
 def preview_init(content: str, sources: list[Path], root: Path, path: Path) -> None:
@@ -454,6 +604,9 @@ def diff_outputs(data: dict[str, Any], out_dir: Path, targets: list[str]) -> lis
 
 
 def cmd_init(args: argparse.Namespace) -> int:
+    if args.list_templates:
+        print_templates()
+        return 0
     if args.path != "agent-playbook.toml" and args.output != "agent-playbook.toml":
         print("Use either positional path or --output, not both", file=sys.stderr)
         return 2
@@ -462,7 +615,7 @@ def cmd_init(args: argparse.Namespace) -> int:
         print(f"Refusing to overwrite {path}; pass --force", file=sys.stderr)
         return 2
     root = Path(".")
-    content, sources = init_playbook_content(root)
+    content, sources, init_kind = init_playbook_content(root, args.template, args.force_template)
     if args.dry_run:
         preview_init(content, sources, root, path)
         return 0
@@ -471,8 +624,15 @@ def cmd_init(args: argparse.Namespace) -> int:
     if sources:
         source_list = ", ".join(str(source.relative_to(root)) for source in sources)
         print(f"Created {path} from {source_list}")
+    elif init_kind == "template" and args.template != "generic":
+        print(f"Created {path} from {args.template} template")
     else:
         print(f"Created {path}")
+    return 0
+
+
+def cmd_templates(args: argparse.Namespace) -> int:
+    print_templates()
     return 0
 
 
@@ -546,9 +706,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_init = sub.add_parser("init", help="create or migrate an agent-playbook.toml")
     p_init.add_argument("path", nargs="?", default="agent-playbook.toml")
     p_init.add_argument("--output", default="agent-playbook.toml", help="playbook path to create")
+    p_init.add_argument("--template", choices=template_names(), default="generic", help="starter template to use when not migrating existing instruction files")
+    p_init.add_argument("--force-template", action="store_true", help="use --template even when existing instruction files are detected")
+    p_init.add_argument("--list-templates", action="store_true", help="list starter templates without writing files")
     p_init.add_argument("--force", action="store_true", help="overwrite an existing output file")
     p_init.add_argument("--dry-run", "--preview", action="store_true", help="preview migrated playbook content without writing files")
     p_init.set_defaults(func=cmd_init)
+
+    p_templates = sub.add_parser("templates", help="list starter templates")
+    p_templates.set_defaults(func=cmd_templates)
 
     p_check = sub.add_parser("check", help="validate a playbook")
     p_check.add_argument("playbook", nargs="?", default="agent-playbook.toml")

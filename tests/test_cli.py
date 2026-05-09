@@ -72,6 +72,83 @@ class AgentPlaybookTests(unittest.TestCase):
             self.assertIn("[project]", output.read_text(encoding="utf-8"))
             self.assertIn(f"Created {output}", stdout.getvalue())
 
+    def test_cli_init_list_templates_does_not_write(self) -> None:
+        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["init", "--list-templates"])
+
+            output = stdout.getvalue()
+            self.assertEqual(status, 0)
+            self.assertIn("generic", output)
+            self.assertIn("python-cli", output)
+            self.assertIn("node-library", output)
+            self.assertIn("docs-only", output)
+            self.assertFalse(Path("agent-playbook.toml").exists())
+
+    def test_cli_templates_command_lists_templates(self) -> None:
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            status = main(["templates"])
+
+        self.assertEqual(status, 0)
+        self.assertIn("python-cli", stdout.getvalue())
+
+    def test_cli_init_python_cli_template_checks_and_renders(self) -> None:
+        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["init", "--template", "python-cli"])
+
+            output = Path("agent-playbook.toml")
+            raw = output.read_text(encoding="utf-8")
+            data = load_playbook(output)
+            self.assertEqual(status, 0)
+            self.assertIn("Created agent-playbook.toml from python-cli template", stdout.getvalue())
+            self.assertEqual(data["project"]["language"], "Python")
+            self.assertEqual(data["commands"]["test"], "python -m unittest discover -s tests -v")
+            self.assertFalse([i for i in validate(data, raw) if i.level == "error"])
+            rendered = render(data, Path("rendered"), ["agents"])
+            self.assertEqual(rendered, [Path("rendered/AGENTS.md")])
+            self.assertIn("Python CLI package", Path("rendered/AGENTS.md").read_text(encoding="utf-8"))
+
+    def test_cli_init_prefers_migration_over_template_when_sources_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            Path("AGENTS.md").write_text(
+                """# Agent Instructions
+
+## Project
+
+Migrated project.
+
+## Commands
+
+- Test: `python -m unittest`
+""",
+                encoding="utf-8",
+            )
+
+            status = main(["init", "--template", "node-library"])
+            data = load_playbook(Path("agent-playbook.toml"))
+
+            self.assertEqual(status, 0)
+            self.assertEqual(data["project"]["summary"], "Migrated project.")
+            self.assertEqual(data["commands"]["test"], "python -m unittest")
+
+    def test_cli_init_force_template_overrides_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            Path("AGENTS.md").write_text("# Project\n\nMigrated project.\n", encoding="utf-8")
+
+            status = main(["init", "--template", "node-library", "--force-template"])
+            data = load_playbook(Path("agent-playbook.toml"))
+
+            self.assertEqual(status, 0)
+            self.assertEqual(data["project"]["language"], "JavaScript/TypeScript")
+            self.assertEqual(data["commands"]["setup"], "npm install")
+
     def test_cli_init_refuses_existing_output_without_force(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             output = Path(td) / "agent-playbook.toml"

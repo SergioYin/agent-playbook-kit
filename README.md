@@ -30,6 +30,13 @@ No runtime dependencies are required beyond Python 3.11+.
 # 1) Create a starter playbook, or migrate existing instruction files
 agent-playbook init
 
+# Optional: choose a starter template when no instruction files exist
+agent-playbook init --template python-cli
+
+# Optional: discover starter templates without writing files
+agent-playbook templates
+agent-playbook init --list-templates
+
 # Optional: preview migration before writing agent-playbook.toml
 agent-playbook init --preview
 
@@ -91,18 +98,28 @@ summary_template = "Summarize changed files, validation commands, and remaining 
 ## CLI reference
 
 ```bash
-agent-playbook init [path] [--output agent-playbook.toml] [--force] [--dry-run|--preview]
+agent-playbook init [path] [--output agent-playbook.toml] [--template generic|python-cli|node-library|docs-only] [--force-template] [--list-templates] [--force] [--dry-run|--preview]
+agent-playbook templates
 agent-playbook check [agent-playbook.toml]
 agent-playbook diff [agent-playbook.toml] --target agents --target claude --target cursor --out . [--exit-code] [--quiet]
 agent-playbook render [agent-playbook.toml] --target agents --target claude --target cursor --out . [--dry-run]
 ```
 
-`init` creates `agent-playbook.toml` by default. If the repository already has `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, or `.cursor/rules/*.mdc`, it bootstraps the playbook from those files instead of writing the generic starter. It parses simple Markdown headings conservatively:
+`init` creates `agent-playbook.toml` by default. If the repository already has `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, or `.cursor/rules/*.mdc`, it bootstraps the playbook from those files instead of writing a starter template. It parses simple Markdown headings conservatively:
 
 - project-like headings become `[project].summary`;
 - principle/guideline/rule headings become `[principles].items`;
 - command/setup/test/lint/run headings become `[commands]` entries when commands are written in backticks;
 - constraint/boundary/security/forbidden headings become `[boundaries].forbidden`.
+
+Use `--template` to choose a built-in starter when no existing instruction files are detected:
+
+- `generic`: general-purpose starter matching the original init behavior;
+- `python-cli`: Python command-line package with unittest and compileall checks;
+- `node-library`: Node.js or TypeScript library with npm scripts;
+- `docs-only`: documentation-focused repository.
+
+Run `agent-playbook templates` or `agent-playbook init --list-templates` to list templates without writing files. Migration stays preferred when source instruction files exist; pass `--force-template` only when you intentionally want the selected template instead.
 
 Use `--output path/to/agent-playbook.toml` to choose the destination. Existing output files are never overwritten unless `--force` is passed.
 
@@ -186,6 +203,7 @@ agent-playbook diff --quiet agent-playbook.toml --target agents --target claude 
 python -m compileall src tests
 python -m unittest discover -s tests
 python -m agent_playbook_kit.cli check examples/agent-playbook.toml
+python scripts/selfcheck.py
 ```
 
 ## License
