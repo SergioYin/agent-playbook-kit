@@ -62,6 +62,22 @@ class AgentPlaybookTests(unittest.TestCase):
             self.assertIn("+# Agent Instructions: example-service", output)
             self.assertFalse((out / "AGENTS.md").exists())
 
+    def test_cli_diff_exit_code_reports_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["diff", str(playbook), "--out", str(out), "--exit-code"])
+
+            output = stdout.getvalue()
+            self.assertEqual(status, 1)
+            self.assertIn("--- /dev/null", output)
+            self.assertIn(f"+++ {out / 'AGENTS.md'}", output)
+            self.assertFalse((out / "AGENTS.md").exists())
+
     def test_cli_diff_reports_no_changes_for_matching_generated_file(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             playbook = Path(td) / "agent-playbook.toml"
@@ -73,6 +89,21 @@ class AgentPlaybookTests(unittest.TestCase):
 
             with contextlib.redirect_stdout(stdout):
                 status = main(["diff", str(playbook), "--out", str(out)])
+
+            self.assertEqual(status, 0)
+            self.assertEqual(stdout.getvalue(), "No changes.\n")
+
+    def test_cli_diff_exit_code_reports_no_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
+            data = load_playbook(playbook)
+            render(data, out, ["agents"])
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["diff", str(playbook), "--out", str(out), "--exit-code"])
 
             self.assertEqual(status, 0)
             self.assertEqual(stdout.getvalue(), "No changes.\n")
@@ -90,6 +121,23 @@ class AgentPlaybookTests(unittest.TestCase):
                 status = main(["diff", str(playbook), "--out", str(out)])
 
             self.assertEqual(status, 1)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertIn("ERROR: possible secret detected", stderr.getvalue())
+            self.assertFalse((out / "AGENTS.md").exists())
+
+    def test_cli_diff_exit_code_validation_errors_return_two(self) -> None:
+        raw = DEFAULT_PLAYBOOK + '\nleak = "token=abcdefghijklmnopqrstuvwxyz123456"\n'
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            playbook.write_text(raw, encoding="utf-8")
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                status = main(["diff", str(playbook), "--out", str(out), "--exit-code"])
+
+            self.assertEqual(status, 2)
             self.assertEqual(stdout.getvalue(), "")
             self.assertIn("ERROR: possible secret detected", stderr.getvalue())
             self.assertFalse((out / "AGENTS.md").exists())

@@ -251,14 +251,14 @@ def cmd_diff(args: argparse.Namespace) -> int:
     if errors:
         for issue in errors:
             print(f"ERROR: {issue.message}", file=sys.stderr)
-        return 1
+        return 2 if args.exit_code else 1
     targets = args.target or ["agents"]
     diff_lines = diff_outputs(data, Path(args.out), targets)
     if not diff_lines:
         print("No changes.")
         return 0
     sys.stdout.writelines(diff_lines)
-    return 0
+    return 1 if args.exit_code else 0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -295,6 +295,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_diff.add_argument("playbook", nargs="?", default="agent-playbook.toml")
     p_diff.add_argument("--out", default=".", help="output directory")
     p_diff.add_argument("--target", action="append", choices=["agents", "claude", "cursor", "copilot"], help="diff target; may be repeated; defaults to agents")
+    p_diff.add_argument("--exit-code", action="store_true", help="return 1 when generated output differs, 0 when unchanged, and 2 for validation errors")
     p_diff.set_defaults(func=cmd_diff)
     return parser
 
