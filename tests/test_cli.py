@@ -45,6 +45,114 @@ class AgentPlaybookTests(unittest.TestCase):
     def test_cli_check_example(self) -> None:
         self.assertEqual(main(["check", "examples/agent-playbook.toml"]), 0)
 
+    def test_cli_init_creates_starter_with_output(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "custom-playbook.toml"
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["init", "--output", str(output)])
+
+            self.assertEqual(status, 0)
+            self.assertTrue(output.exists())
+            self.assertIn("[project]", output.read_text(encoding="utf-8"))
+            self.assertIn(f"Created {output}", stdout.getvalue())
+
+    def test_cli_init_refuses_existing_output_without_force(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "agent-playbook.toml"
+            output.write_text("existing", encoding="utf-8")
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stderr(stderr):
+                status = main(["init", "--output", str(output)])
+
+            self.assertEqual(status, 2)
+            self.assertEqual(output.read_text(encoding="utf-8"), "existing")
+            self.assertIn("Refusing to overwrite", stderr.getvalue())
+
+    def test_cli_init_migrates_existing_instruction_files(self) -> None:
+        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            Path("AGENTS.md").write_text(
+                """# Agent Instructions
+
+## Project
+
+Payment API for account billing.
+
+## Principles
+
+- Prefer focused patches.
+- Explain validation gaps.
+
+## Commands
+
+- Setup: `python -m pip install -e .`
+- Test: `python -m unittest discover -s tests -v`
+
+## Constraints
+
+- Do not commit secrets or build output.
+""",
+                encoding="utf-8",
+            )
+            output = Path("agent-playbook.toml")
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["init"])
+
+            raw = output.read_text(encoding="utf-8")
+            data = load_playbook(output)
+            self.assertEqual(status, 0)
+            self.assertIn("Created agent-playbook.toml from AGENTS.md", stdout.getvalue())
+            self.assertEqual(data["project"]["summary"], "Payment API for account billing.")
+            self.assertEqual(data["commands"]["setup"], "python -m pip install -e .")
+            self.assertEqual(data["commands"]["test"], "python -m unittest discover -s tests -v")
+            self.assertIn("Prefer focused patches.", data["principles"]["items"])
+            self.assertIn("Do not commit secrets or build output.", data["boundaries"]["forbidden"])
+            self.assertFalse([i for i in validate(data, raw) if i.level == "error"])
+
+    def test_cli_init_migrates_cursor_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            rules = Path(".cursor/rules")
+            rules.mkdir(parents=True)
+            (rules / "python.mdc").write_text(
+                """---
+description: Python rules
+alwaysApply: true
+---
+
+## Commands
+
+- Lint: `python -m compileall src tests`
+""",
+                encoding="utf-8",
+            )
+
+            status = main(["init"])
+            data = load_playbook(Path("agent-playbook.toml"))
+
+            self.assertEqual(status, 0)
+            self.assertEqual(data["commands"]["lint"], "python -m compileall src tests")
+            self.assertEqual(data["context"]["important_paths"], [".cursor/rules/python.mdc"])
+
+    def test_cli_init_redacts_secret_looking_migrated_text(self) -> None:
+        with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
+            fake_value = "abcdefghijklmnopqrstuvwxyz" + "123456"
+            Path("CLAUDE.md").write_text(
+                "# Project\n\n"
+                + f"Use token={fake_value} for nothing; this should not migrate.\n",
+                encoding="utf-8",
+            )
+
+            status = main(["init"])
+            raw = Path("agent-playbook.toml").read_text(encoding="utf-8")
+
+            self.assertEqual(status, 0)
+            self.assertIn("[REDACTED]", raw)
+            self.assertNotIn(fake_value, raw)
+
     def test_cli_diff_reports_additions_for_missing_target(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             playbook = Path(td) / "agent-playbook.toml"

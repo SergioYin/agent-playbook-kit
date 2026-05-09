@@ -47,6 +47,14 @@ important_paths = ["src/", "tests/", "examples/"]
 summary_template = "Summarize changed files, validation commands, and remaining risks."
 """
 
+INSTRUCTION_SOURCES = [
+    Path("AGENTS.md"),
+    Path("CLAUDE.md"),
+    Path(".github/copilot-instructions.md"),
+]
+
+COMMAND_HINTS = ("setup", "install", "test", "lint", "format", "run", "build", "check")
+
 @dataclass
 class Issue:
     level: str
@@ -71,6 +79,228 @@ def as_list(value: Any) -> list[str]:
     if isinstance(value, list):
         return [str(v) for v in value]
     return [str(value)]
+
+
+def redact_secrets(value: str) -> str:
+    redacted = value
+    for pattern in SECRET_PATTERNS:
+        redacted = pattern.sub("[REDACTED]", redacted)
+    return redacted
+
+
+def toml_string(value: str) -> str:
+    value = redact_secrets(value)
+    escaped = (
+        value.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\b", "\\b")
+        .replace("\f", "\\f")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+    )
+    return f'"{escaped}"'
+
+
+def toml_array(items: list[str]) -> str:
+    if not items:
+        return "[]"
+    rendered = ",\n  ".join(toml_string(item) for item in items)
+    return "[\n  " + rendered + "\n]"
+
+
+def clean_markdown_text(text: str) -> str:
+    lines = text.splitlines()
+    if lines and lines[0].strip() == "---":
+        for index, line in enumerate(lines[1:], start=1):
+            if line.strip() == "---":
+                lines = lines[index + 1 :]
+                break
+    return "\n".join(lines).strip()
+
+
+def split_markdown_sections(text: str) -> list[tuple[str, str]]:
+    sections: list[tuple[str, list[str]]] = []
+    current_heading = "project"
+    current_lines: list[str] = []
+    for line in clean_markdown_text(text).splitlines():
+        match = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", line)
+        if match:
+            if current_lines:
+                sections.append((current_heading, current_lines))
+            current_heading = match.group(1).strip()
+            current_lines = []
+            continue
+        current_lines.append(line)
+    if current_lines:
+        sections.append((current_heading, current_lines))
+    return [(heading, "\n".join(lines).strip()) for heading, lines in sections if "\n".join(lines).strip()]
+
+
+def normalize_heading(heading: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", heading.lower()).strip()
+
+
+def classify_section(heading: str) -> str:
+    normalized = normalize_heading(heading)
+    if any(word in normalized for word in ("command", "setup", "test", "build", "run", "lint")):
+        return "commands"
+    if any(word in normalized for word in ("constraint", "boundary", "forbidden", "avoid", "never", "security")):
+        return "constraints"
+    if any(word in normalized for word in ("principle", "guideline", "practice", "instruction", "rule")):
+        return "principles"
+    if any(word in normalized for word in ("project", "overview", "summary", "snapshot", "context", "about")):
+        return "project"
+    return "project"
+
+
+def extract_list_items(text: str) -> list[str]:
+    items: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        match = re.match(r"^(?:[-*+]|\d+[.)])\s+(.+)$", stripped)
+        if match:
+            items.append(match.group(1).strip())
+    if items:
+        return items
+    collapsed = re.sub(r"\s+", " ", text).strip()
+    return [collapsed] if collapsed else []
+
+
+def plain_text(text: str) -> str:
+    cleaned = re.sub(r"`([^`]+)`", r"\1", text)
+    cleaned = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", cleaned)
+    cleaned = re.sub(r"[*_]+", "", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def extract_commands(text: str) -> dict[str, str]:
+    commands: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        code_match = re.search(r"`([^`]+)`", stripped)
+        if not code_match:
+            continue
+        command = code_match.group(1).strip()
+        prefix = stripped[: code_match.start()]
+        key_match = re.search(r"([A-Za-z][A-Za-z0-9_-]*)\s*:?\s*$", prefix)
+        key = key_match.group(1).lower().replace("-", "_") if key_match else ""
+        if key not in COMMAND_HINTS:
+            for hint in COMMAND_HINTS:
+                if re.search(rf"\b{re.escape(hint)}\b", stripped, re.IGNORECASE):
+                    key = hint
+                    break
+        if key in COMMAND_HINTS and key not in commands:
+            commands[key] = command
+    return commands
+
+
+def discover_instruction_sources(root: Path) -> list[Path]:
+    sources = [root / rel for rel in INSTRUCTION_SOURCES if (root / rel).is_file()]
+    cursor_sources = sorted((root / ".cursor/rules").glob("*.mdc"))
+    for source in cursor_sources:
+        if source not in sources and source.is_file():
+            sources.append(source)
+    return sources
+
+
+def infer_project_name(root: Path) -> str:
+    name = root.resolve().name
+    return name or "example-service"
+
+
+def infer_language(root: Path) -> str:
+    checks = [
+        ("pyproject.toml", "Python"),
+        ("package.json", "JavaScript/TypeScript"),
+        ("Cargo.toml", "Rust"),
+        ("go.mod", "Go"),
+        ("pom.xml", "Java"),
+        ("Gemfile", "Ruby"),
+    ]
+    for filename, language in checks:
+        if (root / filename).exists():
+            return language
+    return "Not specified"
+
+
+def build_migrated_playbook(root: Path, sources: list[Path]) -> str:
+    project_chunks: list[str] = []
+    principles: list[str] = []
+    forbidden: list[str] = []
+    commands: dict[str, str] = {}
+
+    for source in sources:
+        text = source.read_text(encoding="utf-8")
+        for heading, body in split_markdown_sections(text):
+            kind = classify_section(heading)
+            if kind == "commands":
+                commands.update({k: v for k, v in extract_commands(body).items() if k not in commands})
+            elif kind == "principles":
+                principles.extend(extract_list_items(body))
+            elif kind == "constraints":
+                forbidden.extend(extract_list_items(body))
+            elif body:
+                project_chunks.append(plain_text(body))
+
+    summary = next((chunk for chunk in project_chunks if chunk), "Migrated from existing repository agent instruction files.")
+    if len(summary) > 220:
+        summary = summary[:217].rstrip() + "..."
+    source_paths = [str(path.relative_to(root)) for path in sources]
+    principles = principles[:12] or [
+        "Prefer small, reviewable changes.",
+        "Run tests or explain why they could not run.",
+    ]
+    forbidden = forbidden[:12] or [
+        "Do not commit secrets, caches, build output, or generated credentials.",
+    ]
+
+    lines = [
+        "# agent-playbook.toml: migrated from existing repository instruction files",
+        "[project]",
+        f"name = {toml_string(infer_project_name(root))}",
+        f"summary = {toml_string(summary)}",
+        f"language = {toml_string(infer_language(root))}",
+        "",
+        "[commands]",
+    ]
+    if commands:
+        for key in sorted(commands):
+            lines.append(f"{key} = {toml_string(commands[key])}")
+    else:
+        lines.extend(
+            [
+                '# setup = "python -m pip install -e ."',
+                '# test = "python -m unittest discover -s tests -v"',
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "[principles]",
+            f"items = {toml_array(principles)}",
+            "",
+            "[boundaries]",
+            'allowed = ["Edit source, tests, docs, examples, and packaging metadata."]',
+            f"forbidden = {toml_array(forbidden)}",
+            "",
+            "[context]",
+            f"architecture = {toml_string('Review migrated source instruction files for additional architecture notes.')}",
+            f"important_paths = {toml_array(source_paths)}",
+            "",
+            "[handoff]",
+            'summary_template = "Summarize changed files, validation commands, and remaining risks."',
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def init_playbook_content(root: Path) -> tuple[str, list[Path]]:
+    sources = discover_instruction_sources(root)
+    if not sources:
+        return DEFAULT_PLAYBOOK, []
+    return build_migrated_playbook(root, sources), sources
 
 
 def validate(data: dict[str, Any], raw_text: str) -> list[Issue]:
@@ -100,7 +330,7 @@ def render_agents_md(data: dict[str, Any], target: str) -> str:
     project = data.get("project", {})
     commands = data.get("commands", {})
     principles = as_list(data.get("principles", {}).get("items"))
-    boundaries = data.get("boundaries", {})
+    boundaries = data.get("boundaries", data.get("constraints", {}))
     context = data.get("context", {})
     handoff = data.get("handoff", {})
     target_note = {
@@ -202,12 +432,22 @@ def diff_outputs(data: dict[str, Any], out_dir: Path, targets: list[str]) -> lis
 
 
 def cmd_init(args: argparse.Namespace) -> int:
-    path = Path(args.path)
+    if args.path != "agent-playbook.toml" and args.output != "agent-playbook.toml":
+        print("Use either positional path or --output, not both", file=sys.stderr)
+        return 2
+    path = Path(args.output if args.output != "agent-playbook.toml" else args.path)
     if path.exists() and not args.force:
         print(f"Refusing to overwrite {path}; pass --force", file=sys.stderr)
         return 2
-    path.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
-    print(f"Created {path}")
+    root = Path(".")
+    content, sources = init_playbook_content(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    if sources:
+        source_list = ", ".join(str(source.relative_to(root)) for source in sources)
+        print(f"Created {path} from {source_list}")
+    else:
+        print(f"Created {path}")
     return 0
 
 
@@ -275,9 +515,10 @@ def build_parser() -> argparse.ArgumentParser:
         """),
     )
     sub = parser.add_subparsers(dest="command", required=True)
-    p_init = sub.add_parser("init", help="create a starter agent-playbook.toml")
+    p_init = sub.add_parser("init", help="create or migrate an agent-playbook.toml")
     p_init.add_argument("path", nargs="?", default="agent-playbook.toml")
-    p_init.add_argument("--force", action="store_true")
+    p_init.add_argument("--output", default="agent-playbook.toml", help="playbook path to create")
+    p_init.add_argument("--force", action="store_true", help="overwrite an existing output file")
     p_init.set_defaults(func=cmd_init)
 
     p_check = sub.add_parser("check", help="validate a playbook")

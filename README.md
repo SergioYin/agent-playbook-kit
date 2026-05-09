@@ -27,7 +27,7 @@ No runtime dependencies are required beyond Python 3.11+.
 ## Quick start
 
 ```bash
-# 1) Create a starter playbook
+# 1) Create a starter playbook, or migrate existing instruction files
 agent-playbook init
 
 # 2) Validate it
@@ -88,11 +88,20 @@ summary_template = "Summarize changed files, validation commands, and remaining 
 ## CLI reference
 
 ```bash
-agent-playbook init [path] [--force]
+agent-playbook init [path] [--output agent-playbook.toml] [--force]
 agent-playbook check [agent-playbook.toml]
 agent-playbook diff [agent-playbook.toml] --target agents --target claude --target cursor --out . [--exit-code]
 agent-playbook render [agent-playbook.toml] --target agents --target claude --target cursor --out .
 ```
+
+`init` creates `agent-playbook.toml` by default. If the repository already has `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, or `.cursor/rules/*.mdc`, it bootstraps the playbook from those files instead of writing the generic starter. It parses simple Markdown headings conservatively:
+
+- project-like headings become `[project].summary`;
+- principle/guideline/rule headings become `[principles].items`;
+- command/setup/test/lint/run headings become `[commands]` entries when commands are written in backticks;
+- constraint/boundary/security/forbidden headings become `[boundaries].forbidden`.
+
+Use `--output path/to/agent-playbook.toml` to choose the destination. Existing output files are never overwritten unless `--force` is passed.
 
 `check` reports:
 
@@ -111,6 +120,39 @@ See `examples/agent-playbook.toml` and run:
 python -m agent_playbook_kit.cli check examples/agent-playbook.toml
 python -m agent_playbook_kit.cli diff examples/agent-playbook.toml --out /tmp/agent-playbook-demo --target agents --target claude --target cursor
 python -m agent_playbook_kit.cli render examples/agent-playbook.toml --out /tmp/agent-playbook-demo --target agents --target claude --target cursor
+```
+
+Self-contained migration example:
+
+```bash
+tmpdir="$(mktemp -d)"
+cd "$tmpdir"
+
+cat > AGENTS.md <<'EOF'
+# Agent Instructions
+
+## Project
+
+Payment API for account billing.
+
+## Principles
+
+- Prefer focused patches.
+- Explain validation gaps.
+
+## Commands
+
+- Setup: `python -m pip install -e .`
+- Test: `python -m unittest discover -s tests -v`
+
+## Constraints
+
+- Do not commit secrets, caches, or build output.
+EOF
+
+agent-playbook init --output agent-playbook.toml
+agent-playbook check agent-playbook.toml
+agent-playbook diff agent-playbook.toml --target agents --target claude --target cursor
 ```
 
 ## Non-goals
