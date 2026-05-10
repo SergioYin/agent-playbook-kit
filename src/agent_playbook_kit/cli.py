@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import json
 import re
 import sys
 import textwrap
@@ -167,6 +168,20 @@ class RenderedOutput:
     target: str
     path: Path
     content: str
+
+
+@dataclass
+class CommandEvidence:
+    source: str
+    detail: str
+
+
+@dataclass
+class CommandDriftIssue:
+    id: str
+    command_key: str
+    command: str
+    evidence: list[str]
 
 
 def load_playbook(path: Path) -> dict[str, Any]:
@@ -494,6 +509,131 @@ def validate(data: dict[str, Any], raw_text: str) -> list[Issue]:
     return issues
 
 
+def command_entries(data: dict[str, Any]) -> dict[str, str]:
+    commands = data.get("commands", {})
+    if not isinstance(commands, dict):
+        return {}
+    return {str(key): str(value) for key, value in commands.items() if str(value).strip()}
+
+
+def read_optional_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def command_supported_by_readme(command: str, root: Path) -> CommandEvidence | None:
+    if command and command in read_optional_text(root / "README.md"):
+        return CommandEvidence("README.md", "contains exact command")
+    return None
+
+
+def npm_script_command_names(name: str) -> set[str]:
+    commands = {f"npm run {name}", f"npm run-script {name}"}
+    if name in {"start", "stop", "test", "restart"}:
+        commands.add(f"npm {name}")
+    return commands
+
+
+def command_supported_by_package_json(command: str, root: Path) -> CommandEvidence | None:
+    path = root / "package.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+    scripts = data.get("scripts", {})
+    if not isinstance(scripts, dict):
+        return None
+    for name in sorted(scripts):
+        value = str(scripts[name])
+        if command == value or command in npm_script_command_names(str(name)):
+            return CommandEvidence("package.json", f"scripts.{name}")
+    return None
+
+
+def command_supported_by_pyproject(command: str, root: Path) -> CommandEvidence | None:
+    path = root / "pyproject.toml"
+    raw = read_optional_text(path)
+    if command and command in raw:
+        return CommandEvidence("pyproject.toml", "contains exact command")
+    if not raw:
+        return None
+    try:
+        data = tomllib.loads(raw)
+    except tomllib.TOMLDecodeError:
+        return None
+    scripts = data.get("project", {}).get("scripts", {})
+    if not isinstance(scripts, dict):
+        return None
+    executable = command.split(maxsplit=1)[0] if command else ""
+    for name in sorted(scripts):
+        if executable == str(name) or command == str(scripts[name]):
+            return CommandEvidence("pyproject.toml", f"project.scripts.{name}")
+    return None
+
+
+def command_evidence(command: str, root: Path) -> list[CommandEvidence]:
+    evidence: list[CommandEvidence] = []
+    for checker in (
+        command_supported_by_readme,
+        command_supported_by_package_json,
+        command_supported_by_pyproject,
+    ):
+        found = checker(command, root)
+        if found is not None:
+            evidence.append(found)
+    return evidence
+
+
+def validate_command_drift(data: dict[str, Any], root: Path) -> tuple[dict[str, list[CommandEvidence]], list[CommandDriftIssue]]:
+    supported: dict[str, list[CommandEvidence]] = {}
+    issues: list[CommandDriftIssue] = []
+    for key, command in sorted(command_entries(data).items()):
+        evidence = command_evidence(command, root)
+        supported[key] = evidence
+        if not evidence:
+            issues.append(
+                CommandDriftIssue(
+                    "command-missing",
+                    key,
+                    command,
+                    ["README.md", "package.json", "pyproject.toml"],
+                )
+            )
+    return supported, issues
+
+
+def command_drift_payload(data: dict[str, Any], root: Path) -> dict[str, Any]:
+    commands = command_entries(data)
+    supported, issues = validate_command_drift(data, root)
+    issue_payload = [
+        {
+            "id": issue.id,
+            "command_key": issue.command_key,
+            "command": issue.command,
+            "evidence": issue.evidence,
+        }
+        for issue in issues
+    ]
+    supported_payload = {
+        key: [{"source": item.source, "detail": item.detail} for item in evidence]
+        for key, evidence in sorted(supported.items())
+        if evidence
+    }
+    return {
+        "ok": not issues,
+        "commands": {key: commands[key] for key in sorted(commands)},
+        "counts": {
+            "commands": len(commands),
+            "supported": len(commands) - len(issues),
+            "issues": len(issues),
+        },
+        "issues": issue_payload,
+        "supported": supported_payload,
+    }
+
+
 def bullet(items: list[str]) -> str:
     return "\n".join(f"- {item}" for item in items) if items else "- Not specified."
 
@@ -649,6 +789,24 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 1 if any(i.level == "error" for i in issues) else 0
 
 
+def cmd_validate(args: argparse.Namespace) -> int:
+    path = Path(args.playbook)
+    data = load_playbook(path)
+    payload = command_drift_payload(data, path.parent)
+    if args.format == "json":
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    elif payload["ok"]:
+        count = payload["counts"]["commands"]
+        print(f"OK: {count} command{'s' if count != 1 else ''} documented in README or package metadata")
+    else:
+        counts = payload["counts"]
+        print(f"Command drift found: {counts['issues']} of {counts['commands']} command(s) missing")
+        for issue in payload["issues"]:
+            print(f"- {issue['id']} [{issue['command_key']}]: `{issue['command']}`")
+            print(f"  Checked: {', '.join(issue['evidence'])}")
+    return 0 if payload["ok"] or args.no_fail else 1
+
+
 def cmd_render(args: argparse.Namespace) -> int:
     path = Path(args.playbook)
     raw = path.read_text(encoding="utf-8")
@@ -719,6 +877,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_check = sub.add_parser("check", help="validate a playbook")
     p_check.add_argument("playbook", nargs="?", default="agent-playbook.toml")
     p_check.set_defaults(func=cmd_check)
+
+    p_validate = sub.add_parser("validate", help="validate playbook commands against README and package metadata")
+    p_validate.add_argument("playbook", nargs="?", default="agent-playbook.toml")
+    p_validate.add_argument("--format", choices=["text", "json"], default="text", help="output format")
+    p_validate.add_argument("--no-fail", action="store_true", help="return 0 even when command drift issues are found")
+    p_validate.set_defaults(func=cmd_validate)
 
     p_render = sub.add_parser("render", help="render instruction files")
     p_render.add_argument("playbook", nargs="?", default="agent-playbook.toml")

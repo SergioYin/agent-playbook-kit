@@ -43,13 +43,16 @@ agent-playbook init --preview
 # 2) Validate it
 agent-playbook check agent-playbook.toml
 
-# 3) Preview generated file changes
+# 3) Validate declared commands against README/package metadata
+agent-playbook validate agent-playbook.toml
+
+# 4) Preview generated file changes
 agent-playbook diff --target agents --target claude --target cursor
 
-# 4) Use diff in scripts/local checks without writing files or printing clean output
+# 5) Use diff in scripts/local checks without writing files or printing clean output
 agent-playbook diff --quiet --target agents --target claude --target cursor
 
-# 5) Render files for common agents
+# 6) Render files for common agents
 agent-playbook render --target agents --target claude --target cursor
 ```
 
@@ -101,6 +104,7 @@ summary_template = "Summarize changed files, validation commands, and remaining 
 agent-playbook init [path] [--output agent-playbook.toml] [--template generic|python-cli|node-library|docs-only] [--force-template] [--list-templates] [--force] [--dry-run|--preview]
 agent-playbook templates
 agent-playbook check [agent-playbook.toml]
+agent-playbook validate [agent-playbook.toml] [--format text|json] [--no-fail]
 agent-playbook diff [agent-playbook.toml] --target agents --target claude --target cursor --out . [--exit-code] [--quiet]
 agent-playbook render [agent-playbook.toml] --target agents --target claude --target cursor --out . [--dry-run]
 ```
@@ -136,6 +140,14 @@ agent-playbook init --dry-run --output /tmp/agent-playbook.toml
 - missing recommended setup/test commands;
 - over-large playbooks;
 - token/API-key/secret-looking strings.
+
+`validate` checks `[commands]` entries for command drift after rendered instruction files have been generated. A command is considered documented when it appears in `README.md`, is represented by a `package.json` script such as `npm test` or `npm run lint`, or matches a `pyproject.toml` project script executable. It exits `1` when drift is found, or `0` with `--no-fail`:
+
+```bash
+agent-playbook validate agent-playbook.toml
+agent-playbook validate agent-playbook.toml --format json
+agent-playbook validate agent-playbook.toml --no-fail
+```
 
 `diff` validates the playbook like `render`, then prints unified diffs between existing instruction files and the content that would be generated. Missing files are shown as diffs from `/dev/null`. Targets default to `agents`. Pass `--exit-code` to return `1` when generated output would differ from files on disk, `0` when there are no changes, and `2` for validation or usage errors.
 
@@ -186,6 +198,7 @@ EOF
 agent-playbook init --output agent-playbook.toml
 agent-playbook init --preview
 agent-playbook check agent-playbook.toml
+agent-playbook validate agent-playbook.toml
 agent-playbook diff agent-playbook.toml --target agents --target claude --target cursor
 agent-playbook diff --quiet agent-playbook.toml --target agents --target claude --target cursor
 ```

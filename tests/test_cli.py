@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -58,6 +59,117 @@ class AgentPlaybookTests(unittest.TestCase):
 
     def test_cli_check_example(self) -> None:
         self.assertEqual(main(["check", "examples/agent-playbook.toml"]), 0)
+
+    def test_cli_validate_accepts_commands_from_readme_and_package_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            playbook = root / "agent-playbook.toml"
+            playbook.write_text(
+                """[project]
+name = "demo"
+
+[commands]
+test = "npm test"
+lint = "python -m compileall src tests"
+run = "demo-cli --help"
+""",
+                encoding="utf-8",
+            )
+            (root / "README.md").write_text("Run `python -m compileall src tests` before handoff.\n", encoding="utf-8")
+            (root / "package.json").write_text('{"scripts": {"test": "node --test"}}\n', encoding="utf-8")
+            (root / "pyproject.toml").write_text(
+                """[project]
+name = "demo"
+
+[project.scripts]
+demo-cli = "demo.cli:main"
+""",
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["validate", str(playbook)])
+
+            self.assertEqual(status, 0)
+            self.assertIn("OK: 3 commands documented", stdout.getvalue())
+
+    def test_cli_validate_reports_unsupported_commands_and_exit_code(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            playbook = root / "agent-playbook.toml"
+            playbook.write_text(
+                """[project]
+name = "demo"
+
+[commands]
+test = "python -m pytest"
+lint = "ruff check ."
+""",
+                encoding="utf-8",
+            )
+            (root / "README.md").write_text("Run `python -m pytest`.\n", encoding="utf-8")
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["validate", str(playbook)])
+
+            output = stdout.getvalue()
+            self.assertEqual(status, 1)
+            self.assertIn("Command drift found: 1 of 2", output)
+            self.assertIn("command-missing [lint]: `ruff check .`", output)
+            self.assertIn("Checked: README.md, package.json, pyproject.toml", output)
+
+    def test_cli_validate_json_output_is_stable(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            playbook = root / "agent-playbook.toml"
+            playbook.write_text(
+                """[project]
+name = "demo"
+
+[commands]
+test = "python -m pytest"
+lint = "ruff check ."
+""",
+                encoding="utf-8",
+            )
+            (root / "README.md").write_text("Run `python -m pytest`.\n", encoding="utf-8")
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["validate", str(playbook), "--format", "json"])
+
+            payload = json.loads(stdout.getvalue())
+            self.assertEqual(status, 1)
+            self.assertFalse(payload["ok"])
+            self.assertEqual(payload["commands"], {"lint": "ruff check .", "test": "python -m pytest"})
+            self.assertEqual(payload["counts"], {"commands": 2, "issues": 1, "supported": 1})
+            self.assertEqual(payload["issues"][0]["id"], "command-missing")
+            self.assertEqual(payload["issues"][0]["command_key"], "lint")
+            self.assertEqual(payload["issues"][0]["command"], "ruff check .")
+            self.assertEqual(payload["issues"][0]["evidence"], ["README.md", "package.json", "pyproject.toml"])
+            self.assertEqual(payload["supported"]["test"][0]["source"], "README.md")
+
+    def test_cli_validate_no_fail_returns_zero_with_issues(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            playbook.write_text(
+                """[project]
+name = "demo"
+
+[commands]
+lint = "ruff check ."
+""",
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["validate", str(playbook), "--no-fail"])
+
+            self.assertEqual(status, 0)
+            self.assertIn("Command drift found: 1 of 1", stdout.getvalue())
 
     def test_cli_init_creates_starter_with_output(self) -> None:
         with tempfile.TemporaryDirectory() as td:
