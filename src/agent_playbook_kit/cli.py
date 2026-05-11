@@ -50,6 +50,119 @@ important_paths = ["src/", "tests/", "examples/"]
 summary_template = "Summarize changed files, validation commands, and remaining risks."
 """
 
+SAMPLE_PLAYBOOKS: dict[str, dict[str, str]] = {
+    "python-service": {
+        "description": "Python service with CLI, tests, and review boundaries.",
+        "content": """# agent-playbook.toml: sample gallery / python-service
+[project]
+name = "billing-service"
+summary = "Python billing service with a small CLI, deterministic unit tests, and package metadata."
+language = "Python"
+
+[commands]
+setup = "python -m pip install -e ."
+test = "python -m unittest discover -s tests -v"
+lint = "python -m compileall src tests"
+run = "python -m billing_service --help"
+
+[principles]
+items = [
+  "Keep CLI parsing thin and put business behavior in importable modules.",
+  "Prefer focused tests around billing calculations, parsing, and command exit codes.",
+  "Document skipped validation with the exact blocker and risk."
+]
+
+[boundaries]
+allowed = ["Edit source, tests, docs, examples, and packaging metadata."]
+forbidden = [
+  "Do not edit production credentials, customer data exports, or deployment settings.",
+  "Do not add network calls to unit tests.",
+  "Do not add GitHub Actions unless workflow-scope auth is confirmed."
+]
+
+[context]
+architecture = "The CLI delegates to service modules; IO adapters sit at the edges."
+important_paths = ["src/billing_service/", "tests/", "README.md", "pyproject.toml"]
+
+[handoff]
+summary_template = "Summarize changed files, test commands, CLI behavior impact, and remaining billing risks."
+""",
+    },
+    "node-package": {
+        "description": "Node or TypeScript package with package-script validation.",
+        "content": """# agent-playbook.toml: sample gallery / node-package
+[project]
+name = "token-format"
+summary = "Node package that exposes a small formatting API and command-line helper."
+language = "JavaScript/TypeScript"
+
+[commands]
+setup = "npm install"
+test = "npm test"
+lint = "npm run lint"
+build = "npm run build"
+
+[principles]
+items = [
+  "Treat exported functions as public API and avoid breaking changes without docs.",
+  "Keep tests focused on package entry points, edge cases, and CLI behavior.",
+  "Avoid generated dependency churn unless dependency changes are required."
+]
+
+[boundaries]
+allowed = ["Edit source, tests, examples, README, and package metadata."]
+forbidden = [
+  "Do not commit node_modules, build output, .env files, or registry tokens.",
+  "Do not change package publishing credentials or release automation.",
+  "Do not add GitHub Actions unless workflow-scope auth is confirmed."
+]
+
+[context]
+architecture = "Source modules expose the public API; tests verify both imports and CLI entry points."
+important_paths = ["src/", "test/", "tests/", "package.json", "README.md"]
+
+[handoff]
+summary_template = "Summarize API impact, commands run, changed files, and release risks."
+""",
+    },
+    "docs-project": {
+        "description": "Documentation repository with copy-paste command checks.",
+        "content": """# agent-playbook.toml: sample gallery / docs-project
+[project]
+name = "platform-docs"
+summary = "Documentation repository where Markdown accuracy and runnable examples matter most."
+language = "Markdown"
+
+[commands]
+setup = "python -m pip install -e ."
+test = "python -m unittest discover -s tests -v"
+lint = "python -m compileall scripts tests"
+
+[principles]
+items = [
+  "Preserve user-facing meaning and verify command examples after editing.",
+  "Prefer concise task-focused docs over broad rewrites.",
+  "Call out assumptions when examples depend on account, region, or runtime setup."
+]
+
+[boundaries]
+allowed = ["Edit Markdown, examples, docs assets, and documentation helper scripts."]
+forbidden = [
+  "Do not edit deployment credentials, generated site output, or production settings.",
+  "Do not introduce external dependencies for simple documentation checks.",
+  "Do not add GitHub Actions unless workflow-scope auth is confirmed."
+]
+
+[context]
+architecture = "README and docs pages are source content; generated artifacts must be reproducible."
+important_paths = ["README.md", "docs/", "examples/", "scripts/"]
+
+[handoff]
+summary_template = "List docs changed, examples checked, commands run, and content needing review."
+""",
+    },
+}
+
 STARTER_TEMPLATES: dict[str, dict[str, Any]] = {
     "generic": {
         "description": "General-purpose starter matching the original init behavior.",
@@ -186,6 +299,20 @@ class CommandDriftIssue:
     evidence: list[str]
 
 
+@dataclass
+class ProvenanceIssue:
+    target: str
+    path: Path
+    status: str
+    message: str
+
+
+@dataclass
+class DiffResult:
+    lines: list[str]
+    provenance_issues: list[ProvenanceIssue]
+
+
 def load_playbook(path: Path) -> dict[str, Any]:
     with path.open("rb") as handle:
         return tomllib.load(handle)
@@ -274,6 +401,23 @@ def render_template_playbook(template_name: str, root: Path) -> str:
 def print_templates() -> None:
     for name in template_names():
         print(f"{name}\t{STARTER_TEMPLATES[name]['description']}")
+
+
+def sample_names() -> list[str]:
+    return sorted(SAMPLE_PLAYBOOKS)
+
+
+def sample_content(name: str) -> str:
+    try:
+        content = SAMPLE_PLAYBOOKS[name]["content"]
+    except KeyError as exc:
+        raise SystemExit(f"Unknown sample: {name}") from exc
+    return content.rstrip() + "\n"
+
+
+def print_gallery() -> None:
+    for name in sample_names():
+        print(f"{name}\t{SAMPLE_PLAYBOOKS[name]['description']}")
 
 
 def clean_markdown_text(text: str) -> str:
@@ -713,6 +857,41 @@ def add_provenance(content: str, target: str, playbook_path: Path) -> str:
     return header + content
 
 
+def existing_provenance_line(content: str, target: str) -> str | None:
+    lines = content.splitlines()
+    if target == "cursor" and lines[:4] == ["---", "description: Project AI-agent playbook", "alwaysApply: true", "---"]:
+        lines = lines[4:]
+        if lines and not lines[0].strip():
+            lines = lines[1:]
+    first = lines[0].strip() if lines else ""
+    if first.startswith("<!-- Generated from ") and first.endswith("-->"):
+        return first
+    return None
+
+
+def validate_existing_provenance(output: RenderedOutput, playbook_path: Path) -> ProvenanceIssue | None:
+    if not output.path.exists():
+        return None
+    existing = output.path.read_text(encoding="utf-8")
+    actual = existing_provenance_line(existing, output.target)
+    expected = provenance_header(playbook_path).strip()
+    if actual is None:
+        return ProvenanceIssue(
+            output.target,
+            output.path,
+            "missing",
+            "missing generated-output provenance header",
+        )
+    if actual != expected:
+        return ProvenanceIssue(
+            output.target,
+            output.path,
+            "stale",
+            f"expected `{expected}`, found `{actual}`",
+        )
+    return None
+
+
 def render_outputs(
     data: dict[str, Any],
     out_dir: Path,
@@ -765,9 +944,15 @@ def diff_outputs(
     targets: list[str],
     playbook_path: Path | None = None,
     include_provenance: bool = False,
-) -> list[str]:
+) -> DiffResult:
     diff_lines: list[str] = []
+    provenance_issues: list[ProvenanceIssue] = []
+    source_path = playbook_path or Path("agent-playbook.toml")
     for output in render_outputs(data, out_dir, targets, playbook_path, include_provenance):
+        if include_provenance:
+            issue = validate_existing_provenance(output, source_path)
+            if issue is not None:
+                provenance_issues.append(issue)
         new_lines = output.content.splitlines(keepends=True)
         if output.path.exists():
             old_lines = output.path.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -784,7 +969,17 @@ def diff_outputs(
                 tofile=tofile,
             )
         )
-    return diff_lines
+    return DiffResult(diff_lines, provenance_issues)
+
+
+def provenance_report_lines(issues: list[ProvenanceIssue]) -> list[str]:
+    if not issues:
+        return []
+    lines = ["Provenance report:\n"]
+    for issue in issues:
+        lines.append(f"- {issue.target} {issue.path}: {issue.status}; {issue.message}\n")
+    lines.append("\n")
+    return lines
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -817,6 +1012,27 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 def cmd_templates(args: argparse.Namespace) -> int:
     print_templates()
+    return 0
+
+
+def cmd_gallery(args: argparse.Namespace) -> int:
+    if args.sample is None:
+        if args.output:
+            print("Choose a gallery sample when using --output", file=sys.stderr)
+            return 2
+        print_gallery()
+        return 0
+    content = sample_content(args.sample)
+    if args.output:
+        path = Path(args.output)
+        if path.exists() and not args.force:
+            print(f"Refusing to overwrite {path}; pass --force", file=sys.stderr)
+            return 2
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        print(f"Wrote {path} from gallery sample {args.sample}")
+        return 0
+    print(content, end="")
     return 0
 
 
@@ -880,14 +1096,15 @@ def cmd_diff(args: argparse.Namespace) -> int:
             print(f"ERROR: {issue.message}", file=sys.stderr)
         return 2 if args.exit_code or args.quiet else 1
     targets = args.target or ["agents"]
-    diff_lines = diff_outputs(data, Path(args.out), targets, path, not args.no_provenance)
-    if not diff_lines:
+    result = diff_outputs(data, Path(args.out), targets, path, not args.no_provenance)
+    if not result.lines:
         if not args.quiet:
             print("No changes.")
         return 0
     if args.quiet:
         return 1
-    sys.stdout.writelines(diff_lines)
+    sys.stdout.writelines(provenance_report_lines(result.provenance_issues))
+    sys.stdout.writelines(result.lines)
     return 1 if args.exit_code else 0
 
 
@@ -899,6 +1116,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog=textwrap.dedent("""
         Typical flow:
           agent-playbook init
+          agent-playbook gallery
           agent-playbook check agent-playbook.toml
           agent-playbook diff --target agents --target claude --target cursor
           agent-playbook render --target agents --target claude --target cursor
@@ -917,6 +1135,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_templates = sub.add_parser("templates", help="list starter templates")
     p_templates.set_defaults(func=cmd_templates)
+
+    p_gallery = sub.add_parser("gallery", help="list or emit curated sample playbooks")
+    p_gallery.add_argument("sample", nargs="?", choices=sample_names(), help="sample to print or write; omitted lists the gallery")
+    p_gallery.add_argument("--output", help="write the selected sample to a file instead of stdout")
+    p_gallery.add_argument("--force", action="store_true", help="overwrite an existing --output file")
+    p_gallery.set_defaults(func=cmd_gallery)
 
     p_check = sub.add_parser("check", help="validate a playbook")
     p_check.add_argument("playbook", nargs="?", default="agent-playbook.toml")

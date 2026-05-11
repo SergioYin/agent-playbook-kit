@@ -31,6 +31,18 @@ def main() -> int:
                 python,
                 "-m",
                 "agent_playbook_kit.cli",
+                "gallery",
+                "python-service",
+                "--output",
+                str(work / "gallery-playbook.toml"),
+            ]
+        )
+        run([python, "-m", "agent_playbook_kit.cli", "check", str(work / "gallery-playbook.toml")])
+        run(
+            [
+                python,
+                "-m",
+                "agent_playbook_kit.cli",
                 "init",
                 "--template",
                 "python-cli",

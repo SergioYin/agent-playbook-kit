@@ -37,6 +37,11 @@ agent-playbook init --template python-cli
 agent-playbook templates
 agent-playbook init --list-templates
 
+# Optional: browse curated full playbook samples
+agent-playbook gallery
+agent-playbook gallery python-service
+agent-playbook gallery docs-project --output docs-playbook.toml
+
 # Optional: preview migration before writing agent-playbook.toml
 agent-playbook init --preview
 
@@ -105,6 +110,7 @@ summary_template = "Summarize changed files, validation commands, and remaining 
 ```bash
 agent-playbook init [path] [--output agent-playbook.toml] [--template generic|python-cli|node-library|docs-only] [--force-template] [--list-templates] [--force] [--dry-run|--preview]
 agent-playbook templates
+agent-playbook gallery [python-service|node-package|docs-project] [--output path] [--force]
 agent-playbook check [agent-playbook.toml]
 agent-playbook validate [agent-playbook.toml] [--format text|json] [--no-fail]
 agent-playbook diff [agent-playbook.toml] --target agents --target claude --target cursor --out . [--exit-code] [--quiet] [--no-provenance]
@@ -126,6 +132,14 @@ Use `--template` to choose a built-in starter when no existing instruction files
 - `docs-only`: documentation-focused repository.
 
 Run `agent-playbook templates` or `agent-playbook init --list-templates` to list templates without writing files. Migration stays preferred when source instruction files exist; pass `--force-template` only when you intentionally want the selected template instead.
+
+Use `gallery` when you want complete, realistic sample playbooks rather than compact starters:
+
+- `python-service`: Python service with CLI, tests, and review boundaries;
+- `node-package`: Node or TypeScript package with package-script validation;
+- `docs-project`: documentation repository with copy-paste command checks.
+
+Without arguments, `agent-playbook gallery` lists samples. With a sample name, it prints TOML to stdout. Add `--output path` to write the sample to a file; existing files are not overwritten unless `--force` is passed.
 
 Use `--output path/to/agent-playbook.toml` to choose the destination. Existing output files are never overwritten unless `--force` is passed.
 
@@ -152,6 +166,8 @@ agent-playbook validate agent-playbook.toml --no-fail
 ```
 
 `diff` validates the playbook like `render`, then prints unified diffs between existing instruction files and the content that would be generated. Missing files are shown as diffs from `/dev/null`. Targets default to `agents`. Pass `--exit-code` to return `1` when generated output would differ from files on disk, `0` when there are no changes, and `2` for validation or usage errors.
+
+When provenance headers are enabled, `diff` also validates existing generated files before printing the unified diff. If a target file exists with a missing or stale generated-output header, the command prints a short provenance report so reviewers can distinguish content drift from source/version provenance drift. `--quiet` keeps this report silent for script use, and `--no-provenance` disables both header generation and provenance checks.
 
 Use `--quiet` for copy-paste local verification in scripts. It prints nothing when generated outputs match the files on disk, exits `0` when clean, and exits `1` when any target has drift:
 

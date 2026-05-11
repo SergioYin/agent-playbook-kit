@@ -5,6 +5,7 @@ import io
 import json
 import sys
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -263,6 +264,58 @@ lint = "ruff check ."
         self.assertEqual(status, 0)
         self.assertIn("python-cli", stdout.getvalue())
 
+    def test_cli_gallery_lists_samples(self) -> None:
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            status = main(["gallery"])
+
+        output = stdout.getvalue()
+        self.assertEqual(status, 0)
+        self.assertIn("python-service", output)
+        self.assertIn("node-package", output)
+        self.assertIn("docs-project", output)
+
+    def test_cli_gallery_prints_valid_sample(self) -> None:
+        stdout = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout):
+            status = main(["gallery", "python-service"])
+
+        raw = stdout.getvalue()
+        data = tomllib.loads(raw)
+        self.assertEqual(status, 0)
+        self.assertEqual(data["project"]["name"], "billing-service")
+        self.assertEqual(data["commands"]["test"], "python -m unittest discover -s tests -v")
+        self.assertFalse([i for i in validate(data, raw) if i.level == "error"])
+
+    def test_cli_gallery_writes_sample_and_refuses_overwrite(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td) / "sample.toml"
+            stdout = io.StringIO()
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["gallery", "docs-project", "--output", str(output)])
+            with contextlib.redirect_stderr(stderr):
+                refused = main(["gallery", "docs-project", "--output", str(output)])
+
+            self.assertEqual(status, 0)
+            self.assertEqual(refused, 2)
+            self.assertIn("Wrote", stdout.getvalue())
+            self.assertIn("Refusing to overwrite", stderr.getvalue())
+            self.assertEqual(load_playbook(output)["project"]["name"], "platform-docs")
+
+    def test_cli_gallery_output_requires_sample(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            stderr = io.StringIO()
+
+            with contextlib.redirect_stderr(stderr):
+                status = main(["gallery", "--output", str(Path(td) / "sample.toml")])
+
+            self.assertEqual(status, 2)
+            self.assertIn("Choose a gallery sample", stderr.getvalue())
+
     def test_cli_init_python_cli_template_checks_and_renders(self) -> None:
         with tempfile.TemporaryDirectory() as td, contextlib.chdir(td):
             stdout = io.StringIO()
@@ -467,6 +520,44 @@ Billing service.
             self.assertIn(f"+++ {out / 'AGENTS.md'}", output)
             self.assertIn("+# Agent Instructions: example-service", output)
             self.assertFalse((out / "AGENTS.md").exists())
+
+    def test_cli_diff_reports_missing_existing_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            target = out / "AGENTS.md"
+            playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
+            data = load_playbook(playbook)
+            render(data, out, ["agents"], include_provenance=False)
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["diff", str(playbook), "--out", str(out), "--target", "agents"])
+
+            output = stdout.getvalue()
+            self.assertEqual(status, 0)
+            self.assertIn("Provenance report:", output)
+            self.assertIn(f"- agents {target}: missing; missing generated-output provenance header", output)
+            self.assertIn(f"+++ {target}", output)
+
+    def test_cli_diff_reports_stale_existing_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            target = out / "AGENTS.md"
+            playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
+            data = load_playbook(playbook)
+            render(data, out, ["agents"], playbook_path=Path("old-playbook.toml"), include_provenance=True)
+            stdout = io.StringIO()
+
+            with contextlib.redirect_stdout(stdout):
+                status = main(["diff", str(playbook), "--out", str(out), "--target", "agents"])
+
+            output = stdout.getvalue()
+            self.assertEqual(status, 0)
+            self.assertIn("Provenance report:", output)
+            self.assertIn(f"- agents {target}: stale; expected", output)
+            self.assertIn("old-playbook.toml", output)
 
     def test_cli_diff_exit_code_reports_changes(self) -> None:
         with tempfile.TemporaryDirectory() as td:

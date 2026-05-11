@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.1.8
+
+- Added `agent-playbook gallery` with curated sample playbooks for Python services, Node packages, and docs projects.
+- Added `agent-playbook gallery <sample> --output <path>` for writing a selected sample without adding runtime dependencies.
+- Added provenance validation/reporting to `agent-playbook diff` so existing outputs with missing or stale generated-output headers are called out before the unified diff.
+
 ## v0.1.7
 
 - Added default generated-output provenance headers for rendered and diffed `AGENTS.md`, `CLAUDE.md`, Cursor, and Copilot instruction outputs.
