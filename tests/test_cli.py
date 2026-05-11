@@ -10,6 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from agent_playbook_kit import __version__
 from agent_playbook_kit.cli import DEFAULT_PLAYBOOK, load_playbook, main, render, validate
 
 
@@ -56,6 +57,60 @@ class AgentPlaybookTests(unittest.TestCase):
             self.assertEqual(status, 0)
             self.assertIn(f"Would write: {out / 'AGENTS.md'}", stdout.getvalue())
             self.assertFalse((out / "AGENTS.md").exists())
+
+    def test_cli_render_stamps_provenance_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
+
+            status = main(
+                [
+                    "render",
+                    str(playbook),
+                    "--out",
+                    str(out),
+                    "--target",
+                    "agents",
+                    "--target",
+                    "claude",
+                    "--target",
+                    "copilot",
+                ]
+            )
+
+            self.assertEqual(status, 0)
+            for rel in ("AGENTS.md", "CLAUDE.md", ".github/copilot-instructions.md"):
+                rendered = (out / rel).read_text(encoding="utf-8")
+                self.assertTrue(rendered.startswith("<!-- Generated from "))
+                self.assertIn(f"by agent-playbook-kit {__version__}", rendered.splitlines()[0])
+                self.assertIn(f"(name: {playbook.name})", rendered.splitlines()[0])
+
+    def test_cli_render_no_provenance_omits_header(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
+
+            status = main(["render", str(playbook), "--out", str(out), "--target", "agents", "--no-provenance"])
+
+            rendered = (out / "AGENTS.md").read_text(encoding="utf-8")
+            self.assertEqual(status, 0)
+            self.assertTrue(rendered.startswith("# Agent Instructions: example-service"))
+            self.assertNotIn("Generated from", rendered)
+
+    def test_cli_render_keeps_cursor_frontmatter_before_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            playbook = Path(td) / "agent-playbook.toml"
+            out = Path(td) / "out"
+            playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
+
+            status = main(["render", str(playbook), "--out", str(out), "--target", "cursor"])
+
+            lines = (out / ".cursor/rules/agent-playbook.mdc").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(status, 0)
+            self.assertEqual(lines[:4], ["---", "description: Project AI-agent playbook", "alwaysApply: true", "---"])
+            self.assertTrue(lines[5].startswith("<!-- Generated from "))
 
     def test_cli_check_example(self) -> None:
         self.assertEqual(main(["check", "examples/agent-playbook.toml"]), 0)
@@ -435,7 +490,7 @@ Billing service.
             out = Path(td) / "out"
             playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
             data = load_playbook(playbook)
-            render(data, out, ["agents"])
+            render(data, out, ["agents"], playbook_path=playbook, include_provenance=True)
             stdout = io.StringIO()
 
             with contextlib.redirect_stdout(stdout):
@@ -450,7 +505,7 @@ Billing service.
             out = Path(td) / "out"
             playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
             data = load_playbook(playbook)
-            render(data, out, ["agents"])
+            render(data, out, ["agents"], playbook_path=playbook, include_provenance=True)
             stdout = io.StringIO()
 
             with contextlib.redirect_stdout(stdout):
@@ -479,7 +534,7 @@ Billing service.
             out = Path(td) / "out"
             playbook.write_text(DEFAULT_PLAYBOOK, encoding="utf-8")
             data = load_playbook(playbook)
-            render(data, out, ["agents"])
+            render(data, out, ["agents"], playbook_path=playbook, include_provenance=True)
             stdout = io.StringIO()
 
             with contextlib.redirect_stdout(stdout):

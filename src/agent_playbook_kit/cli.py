@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agent_playbook_kit import __version__
+
 SECRET_PATTERNS = [
     re.compile(r"(?i)(api[_-]?key|token|secret|password)\s*=\s*['\"]?[a-z0-9_\-]{16,}"),
     re.compile(r"ghp_[A-Za-z0-9_]{20,}"),
@@ -690,7 +692,34 @@ Forbidden:
 """
 
 
-def render_outputs(data: dict[str, Any], out_dir: Path, targets: list[str]) -> list[RenderedOutput]:
+def html_comment_value(value: str) -> str:
+    return value.replace("--", "- -").replace(">", "&gt;")
+
+
+def provenance_header(playbook_path: Path) -> str:
+    source = html_comment_value(playbook_path.as_posix())
+    name = html_comment_value(playbook_path.name or playbook_path.as_posix())
+    return f"<!-- Generated from {source} (name: {name}) by agent-playbook-kit {__version__}. -->\n\n"
+
+
+def add_provenance(content: str, target: str, playbook_path: Path) -> str:
+    header = provenance_header(playbook_path)
+    if target != "cursor":
+        return header + content
+    frontmatter_end = content.find("\n---\n\n")
+    if content.startswith("---\n") and frontmatter_end != -1:
+        split_at = frontmatter_end + len("\n---\n\n")
+        return content[:split_at] + header + content[split_at:]
+    return header + content
+
+
+def render_outputs(
+    data: dict[str, Any],
+    out_dir: Path,
+    targets: list[str],
+    playbook_path: Path | None = None,
+    include_provenance: bool = False,
+) -> list[RenderedOutput]:
     mapping = {
         "agents": Path("AGENTS.md"),
         "claude": Path("CLAUDE.md"),
@@ -705,14 +734,23 @@ def render_outputs(data: dict[str, Any], out_dir: Path, targets: list[str]) -> l
         content = render_agents_md(data, target)
         if target == "cursor":
             content = "---\ndescription: Project AI-agent playbook\nalwaysApply: true\n---\n\n" + content
+        if include_provenance:
+            content = add_provenance(content, target, playbook_path or Path("agent-playbook.toml"))
         dest = out_dir / rel
         outputs.append(RenderedOutput(target, dest, content))
     return outputs
 
 
-def render(data: dict[str, Any], out_dir: Path, targets: list[str], dry_run: bool = False) -> list[Path]:
+def render(
+    data: dict[str, Any],
+    out_dir: Path,
+    targets: list[str],
+    dry_run: bool = False,
+    playbook_path: Path | None = None,
+    include_provenance: bool = False,
+) -> list[Path]:
     written: list[Path] = []
-    for output in render_outputs(data, out_dir, targets):
+    for output in render_outputs(data, out_dir, targets, playbook_path, include_provenance):
         dest = output.path
         written.append(dest)
         if not dry_run:
@@ -721,9 +759,15 @@ def render(data: dict[str, Any], out_dir: Path, targets: list[str], dry_run: boo
     return written
 
 
-def diff_outputs(data: dict[str, Any], out_dir: Path, targets: list[str]) -> list[str]:
+def diff_outputs(
+    data: dict[str, Any],
+    out_dir: Path,
+    targets: list[str],
+    playbook_path: Path | None = None,
+    include_provenance: bool = False,
+) -> list[str]:
     diff_lines: list[str] = []
-    for output in render_outputs(data, out_dir, targets):
+    for output in render_outputs(data, out_dir, targets, playbook_path, include_provenance):
         new_lines = output.content.splitlines(keepends=True)
         if output.path.exists():
             old_lines = output.path.read_text(encoding="utf-8").splitlines(keepends=True)
@@ -818,7 +862,7 @@ def cmd_render(args: argparse.Namespace) -> int:
             print(f"ERROR: {issue.message}", file=sys.stderr)
         return 1
     targets = args.target or ["agents"]
-    written = render(data, Path(args.out), targets, args.dry_run)
+    written = render(data, Path(args.out), targets, args.dry_run, path, not args.no_provenance)
     action = "Would write" if args.dry_run else "Wrote"
     for path in written:
         print(f"{action}: {path}")
@@ -836,7 +880,7 @@ def cmd_diff(args: argparse.Namespace) -> int:
             print(f"ERROR: {issue.message}", file=sys.stderr)
         return 2 if args.exit_code or args.quiet else 1
     targets = args.target or ["agents"]
-    diff_lines = diff_outputs(data, Path(args.out), targets)
+    diff_lines = diff_outputs(data, Path(args.out), targets, path, not args.no_provenance)
     if not diff_lines:
         if not args.quiet:
             print("No changes.")
@@ -888,6 +932,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_render.add_argument("playbook", nargs="?", default="agent-playbook.toml")
     p_render.add_argument("--out", default=".", help="output directory")
     p_render.add_argument("--target", action="append", choices=["agents", "claude", "cursor", "copilot"], help="render target; may be repeated; defaults to agents")
+    p_render.add_argument("--no-provenance", action="store_true", help="omit generated-output provenance headers")
     p_render.add_argument("--dry-run", action="store_true")
     p_render.set_defaults(func=cmd_render)
 
@@ -895,6 +940,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_diff.add_argument("playbook", nargs="?", default="agent-playbook.toml")
     p_diff.add_argument("--out", default=".", help="output directory")
     p_diff.add_argument("--target", action="append", choices=["agents", "claude", "cursor", "copilot"], help="diff target; may be repeated; defaults to agents")
+    p_diff.add_argument("--no-provenance", action="store_true", help="omit generated-output provenance headers")
     p_diff.add_argument("--exit-code", action="store_true", help="return 1 when generated output differs, 0 when unchanged, and 2 for validation errors")
     p_diff.add_argument("--quiet", action="store_true", help="return 1 when generated output differs without printing diffs")
     p_diff.set_defaults(func=cmd_diff)

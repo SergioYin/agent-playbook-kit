@@ -56,6 +56,8 @@ agent-playbook diff --quiet --target agents --target claude --target cursor
 agent-playbook render --target agents --target claude --target cursor
 ```
 
+By default, `agent-playbook render` and `agent-playbook diff` include a deterministic generated-output provenance header. The header records the source playbook path/name and the `agent-playbook-kit` version, without timestamps or machine-generated IDs. Pass `--no-provenance` to either command when you need byte-for-byte output without the header.
+
 Outputs:
 
 - `AGENTS.md` for Codex/OpenAI-style coding agents;
@@ -105,8 +107,8 @@ agent-playbook init [path] [--output agent-playbook.toml] [--template generic|py
 agent-playbook templates
 agent-playbook check [agent-playbook.toml]
 agent-playbook validate [agent-playbook.toml] [--format text|json] [--no-fail]
-agent-playbook diff [agent-playbook.toml] --target agents --target claude --target cursor --out . [--exit-code] [--quiet]
-agent-playbook render [agent-playbook.toml] --target agents --target claude --target cursor --out . [--dry-run]
+agent-playbook diff [agent-playbook.toml] --target agents --target claude --target cursor --out . [--exit-code] [--quiet] [--no-provenance]
+agent-playbook render [agent-playbook.toml] --target agents --target claude --target cursor --out . [--dry-run] [--no-provenance]
 ```
 
 `init` creates `agent-playbook.toml` by default. If the repository already has `AGENTS.md`, `CLAUDE.md`, `.github/copilot-instructions.md`, or `.cursor/rules/*.mdc`, it bootstraps the playbook from those files instead of writing a starter template. It parses simple Markdown headings conservatively:
@@ -155,6 +157,13 @@ Use `--quiet` for copy-paste local verification in scripts. It prints nothing wh
 
 ```bash
 agent-playbook diff --quiet --target agents --target claude --target cursor
+```
+
+Use `--no-provenance` with `render` or `diff` to override the default and omit generated-output headers:
+
+```bash
+agent-playbook render --no-provenance --target agents
+agent-playbook diff --no-provenance --target agents
 ```
 
 ## Example

@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.7
+
+- Added default generated-output provenance headers for rendered and diffed `AGENTS.md`, `CLAUDE.md`, Cursor, and Copilot instruction outputs.
+- Added `--no-provenance` for `agent-playbook render` and `agent-playbook diff` to omit provenance headers when needed.
+
 ## v0.1.6
 
 - Added `agent-playbook validate` to report playbook commands missing from `README.md`, `package.json` scripts, and `pyproject.toml` project scripts.
